@@ -71,11 +71,11 @@ view_tasks() {
     for line in "${lines[@]}"; do
         [[ -z "$line" ]] && continue
         local id title status date notes
-        id=$(    echo "$line" | cut -d',' -f1)
-        title=$( echo "$line" | cut -d',' -f2)
+        id=$(echo "$line" | cut -d',' -f1)
+        title=$(echo "$line" | cut -d',' -f2)
         status=$(echo "$line" | cut -d',' -f3)
-        date=$(  echo "$line" | cut -d',' -f4)
-        notes=$( echo "$line" | cut -d',' -f5-)
+        date=$(echo "$line" | cut -d',' -f4)
+        notes=$(echo "$line" | cut -d',' -f5-)
         printf "%-4s  %-28s  %-10s  %-12s  %s\n" "$id" "$title" "$status" "$date" "$notes"
     done
 }

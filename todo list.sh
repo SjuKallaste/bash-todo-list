@@ -3,6 +3,13 @@ CSV_HEADER="ID,Title,Status,Date,Notes"
 STATUS_PENDING="Pending"
 STATUS_DONE="Done"
 
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
 init_storage() {
     if [[ ! -f "$CSV_FILE" ]]; then
         printf "%s\n" "$CSV_HEADER" > "$CSV_FILE"
@@ -22,29 +29,72 @@ next_id() {
     printf "%d" $(( max_id + 1 ))
 }
 
-id_exists() {
-    grep -q "^${1}," "$CSV_FILE" 2>/dev/null
+validate_not_empty() {
+    if [[ -z "${1// }" ]]; then
+        printf "${RED}Error: %s cannot be empty.${RESET}\n" "$2"
+        return 1
+    fi
+}
+
+validate_date() {
+    if [[ ! "$1" =~ ^[0-9]{4}-[0-1][0-9]-[0-3][0-9]$ ]]; then
+        printf "${RED}Error: date must be YYYY-MM-DD.${RESET}\n"
+        return 1
+    fi
+}
+
+validate_id() {
+    if [[ ! "$1" =~ ^[0-9]+$ ]]; then
+        printf "${RED}Error: ID must be a number.${RESET}\n"
+        return 1
+    fi
+    if ! grep -q "^${1}," "$CSV_FILE" 2>/dev/null; then
+        printf "${RED}Error: no task with ID %s.${RESET}\n" "$1"
+        return 1
+    fi
+}
+
+prompt_id() {
+    local id
+    while true; do
+        printf "Task ID: "
+        read -r id
+        validate_not_empty "$id" "ID" || continue
+        validate_id "$id"             && break
+    done
+    printf "%s" "$id"
+}
+
+prompt_date() {
+    local label="$1" current="$2" date
+    while true; do
+        printf "%s [%s] (YYYY-MM-DD, Enter = keep): " "$label" "$current"
+        read -r date
+        if [[ -z "${date// }" ]]; then
+            printf "%s" "$current"
+            return
+        fi
+        validate_date "$date" && break
+    done
+    printf "%s" "$date"
 }
 
 add_task() {
     local title date notes new_id today
     today=$(date +%Y-%m-%d)
 
-    printf "Title: "
-    read -r title
-    if [[ -z "${title// }" ]]; then
-        printf "Error: title cannot be empty.\n"
-        return 1
-    fi
+    while true; do
+        printf "Title: "
+        read -r title
+        validate_not_empty "$title" "Title" && break
+    done
 
-    printf "Due date [YYYY-MM-DD, Enter = today (%s)]: " "$today"
-    read -r date
-    if [[ -z "$date" ]]; then
-        date="$today"
-    elif [[ ! "$date" =~ ^[0-9]{4}-[0-1][0-9]-[0-3][0-9]$ ]]; then
-        printf "Error: invalid date format.\n"
-        return 1
-    fi
+    while true; do
+        printf "Due date [YYYY-MM-DD, Enter = today (%s)]: " "$today"
+        read -r date
+        if [[ -z "$date" ]]; then date="$today"; break; fi
+        validate_date "$date" && break
+    done
 
     printf "Notes (optional): "
     read -r notes
@@ -54,47 +104,45 @@ add_task() {
     new_id=$(next_id)
 
     printf "%s,%s,%s,%s,%s\n" "$new_id" "$title" "$STATUS_PENDING" "$date" "$notes" >> "$CSV_FILE"
-    printf "Task #%s added.\n" "$new_id"
+    printf "${GREEN}Task #%s added.${RESET}\n" "$new_id"
 }
 
 view_tasks() {
     mapfile -t lines < <(tail -n +2 "$CSV_FILE")
 
     if [[ ${#lines[@]} -eq 0 ]]; then
-        printf "No tasks found.\n"
+        printf "${YELLOW}No tasks found.${RESET}\n"
         return
     fi
 
-    printf "%-4s  %-28s  %-10s  %-12s  %s\n" "ID" "Title" "Status" "Date" "Notes"
-    printf "%s\n" "--------------------------------------------------------------------"
+    printf "${BOLD}${CYAN}%-4s  %-28s  %-10s  %-12s  %s${RESET}\n" \
+        "ID" "Title" "Status" "Date" "Notes"
+    printf "%s\n" "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
 
     for line in "${lines[@]}"; do
         [[ -z "$line" ]] && continue
-        local id title status date notes
+        local id title status date notes colour
         id=$(    echo "$line" | cut -d',' -f1)
         title=$( echo "$line" | cut -d',' -f2)
         status=$(echo "$line" | cut -d',' -f3)
         date=$(  echo "$line" | cut -d',' -f4)
         notes=$( echo "$line" | cut -d',' -f5-)
-        printf "%-4s  %-28s  %-10s  %-12s  %s\n" "$id" "$title" "$status" "$date" "$notes"
+
+        if [[ "$status" == "$STATUS_DONE" ]]; then
+            colour="$GREEN"
+        else
+            colour="$YELLOW"
+        fi
+
+        printf "${colour}%-4s  %-28s  %-10s  %-12s  %s${RESET}\n" \
+            "$id" "$title" "$status" "$date" "$notes"
     done
 }
 
 edit_task() {
     view_tasks
-
-    printf "Task ID to edit: "
-    read -r target_id
-
-    if [[ ! "$target_id" =~ ^[0-9]+$ ]]; then
-        printf "Error: ID must be a number.\n"
-        return 1
-    fi
-
-    if ! id_exists "$target_id"; then
-        printf "Error: no task with ID %s.\n" "$target_id"
-        return 1
-    fi
+    local target_id
+    target_id=$(prompt_id)
 
     local current_line cur_title cur_status cur_date cur_notes
     current_line=$(grep "^${target_id}," "$CSV_FILE")
@@ -111,91 +159,57 @@ edit_task() {
     [[ -z "${new_title// }" ]] && new_title="$cur_title"
     new_title="${new_title//,/;}"
 
-    printf "New date [%s] (YYYY-MM-DD): " "$cur_date"
-    read -r new_date
-    if [[ -z "${new_date// }" ]]; then
-        new_date="$cur_date"
-    elif [[ ! "$new_date" =~ ^[0-9]{4}-[0-1][0-9]-[0-3][0-9]$ ]]; then
-        printf "Error: invalid date format. Keeping current date.\n"
-        new_date="$cur_date"
-    fi
+    new_date=$(prompt_date "New date" "$cur_date")
 
     printf "New notes [%s]: " "$cur_notes"
     read -r new_notes
     [[ -z "${new_notes// }" ]] && new_notes="$cur_notes"
     new_notes="${new_notes//,/;}"
 
-    local new_line tmp
-    new_line="${target_id},${new_title},${cur_status},${new_date},${new_notes}"
+    local tmp
     tmp=$(mktemp)
-
     while IFS= read -r row; do
         if [[ "$row" == ${target_id},* ]]; then
-            printf "%s\n" "$new_line"
+            printf "%s,%s,%s,%s,%s\n" "$target_id" "$new_title" "$cur_status" "$new_date" "$new_notes"
         else
             printf "%s\n" "$row"
         fi
     done < "$CSV_FILE" > "$tmp"
     mv "$tmp" "$CSV_FILE"
 
-    printf "Task #%s updated.\n" "$target_id"
+    printf "${GREEN}Task #%s updated.${RESET}\n" "$target_id"
 }
 
 delete_task() {
     view_tasks
+    local target_id confirm tmp
+    target_id=$(prompt_id)
 
-    printf "Task ID to delete: "
-    read -r target_id
-
-    if [[ ! "$target_id" =~ ^[0-9]+$ ]]; then
-        printf "Error: ID must be a number.\n"
-        return 1
-    fi
-
-    if ! id_exists "$target_id"; then
-        printf "Error: no task with ID %s.\n" "$target_id"
-        return 1
-    fi
-
-    printf "Delete task #%s? [y/N]: " "$target_id"
+    printf "${RED}Delete task #%s? [y/N]: ${RESET}" "$target_id"
     read -r confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         printf "Cancelled.\n"
         return
     fi
 
-    local tmp
     tmp=$(mktemp)
     grep -v "^${target_id}," "$CSV_FILE" > "$tmp"
     mv "$tmp" "$CSV_FILE"
 
-    printf "Task #%s deleted.\n" "$target_id"
+    printf "${GREEN}Task #%s deleted.${RESET}\n" "$target_id"
 }
 
 mark_done() {
     view_tasks
+    local target_id tmp current_status
+    target_id=$(prompt_id)
 
-    printf "Task ID to mark as done: "
-    read -r target_id
-
-    if [[ ! "$target_id" =~ ^[0-9]+$ ]]; then
-        printf "Error: ID must be a number.\n"
-        return 1
-    fi
-
-    if ! id_exists "$target_id"; then
-        printf "Error: no task with ID %s.\n" "$target_id"
-        return 1
-    fi
-
-    local current_status
     current_status=$(grep "^${target_id}," "$CSV_FILE" | cut -d',' -f3)
     if [[ "$current_status" == "$STATUS_DONE" ]]; then
-        printf "Task #%s is already done.\n" "$target_id"
+        printf "${YELLOW}Task #%s is already done.${RESET}\n" "$target_id"
         return
     fi
 
-    local tmp
     tmp=$(mktemp)
     while IFS= read -r row; do
         if [[ "$row" == ${target_id},* ]]; then
@@ -206,28 +220,102 @@ mark_done() {
     done < "$CSV_FILE" > "$tmp"
     mv "$tmp" "$CSV_FILE"
 
-    printf "Task #%s marked as done.\n" "$target_id"
+    printf "${GREEN}Task #%s marked as done.${RESET}\n" "$target_id"
+}
+
+search_tasks() {
+    local keyword
+    while true; do
+        printf "Search keyword: "
+        read -r keyword
+        validate_not_empty "$keyword" "Keyword" && break
+    done
+
+    mapfile -t lines < <(tail -n +2 "$CSV_FILE")
+    local found=0
+
+    for line in "${lines[@]}"; do
+        [[ -z "$line" ]] && continue
+        if echo "$line" | grep -qi "$keyword"; then
+            found=1
+            local id title status date
+            id=$(    echo "$line" | cut -d',' -f1)
+            title=$( echo "$line" | cut -d',' -f2)
+            status=$(echo "$line" | cut -d',' -f3)
+            date=$(  echo "$line" | cut -d',' -f4)
+            printf "%-4s  %-28s  %-10s  %s\n" "$id" "$title" "$status" "$date"
+        fi
+    done
+
+    if [[ $found -eq 0 ]]; then
+        printf "${YELLOW}No tasks matched \"%s\".${RESET}\n" "$keyword"
+    fi
+}
+
+show_stats() {
+    mapfile -t lines < <(tail -n +2 "$CSV_FILE")
+
+    local total=0 done_count=0 pending_count=0
+
+    for line in "${lines[@]}"; do
+        [[ -z "$line" ]] && continue
+        (( total++ ))
+        local status
+        status=$(echo "$line" | cut -d',' -f3)
+        case "$status" in
+            "$STATUS_DONE")    (( done_count++    )) ;;
+            "$STATUS_PENDING") (( pending_count++ )) ;;
+        esac
+    done
+
+    printf "Total   : %d\n" "$total"
+    printf "${GREEN}Done    : %d${RESET}\n" "$done_count"
+    printf "${YELLOW}Pending : %d${RESET}\n" "$pending_count"
+
+    if [[ $total -gt 0 ]]; then
+        local filled=$(( done_count * 20 / total ))
+        local empty=$(( 20 - filled ))
+        local bar="" i
+        for (( i=0; i<filled; i++ )); do bar+="#"; done
+        for (( i=0; i<empty;  i++ )); do bar+="-"; done
+        printf "Progress [${GREEN}%s${RESET}] %d%%\n" "$bar" $(( done_count * 100 / total ))
+    fi
 }
 
 while true; do
-    printf "\n"
+    clear
+
+    local total pending done_c
+    total=$(   tail -n +2 "$CSV_FILE" | grep -c '.'                   || true)
+    pending=$( tail -n +2 "$CSV_FILE" | grep -c ",${STATUS_PENDING}," || true)
+    done_c=$(  tail -n +2 "$CSV_FILE" | grep -c ",${STATUS_DONE},"    || true)
+
+    printf "${BOLD}${CYAN}  To-Do List${RESET}   "
+    printf "%d total  ${YELLOW}%d pending${RESET}  ${GREEN}%d done${RESET}\n" \
+        "$total" "$pending" "$done_c"
+    printf "%s\n" "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
     printf "1) Add Task\n"
     printf "2) View Tasks\n"
     printf "3) Edit Task\n"
     printf "4) Delete Task\n"
     printf "5) Mark as Done\n"
+    printf "6) Search\n"
+    printf "7) Stats\n"
     printf "0) Quit\n"
+    printf "%s\n" "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
     printf "Choice: "
     read -r choice
 
     case "$choice" in
-        1) add_task    ;;
-        2) view_tasks  ;;
-        3) edit_task   ;;
-        4) delete_task ;;
-        5) mark_done   ;;
-        0) printf "Goodbye.\n"; exit 0 ;;
-        *) printf "Invalid option.\n" ;;
+        1) add_task     ;;
+        2) view_tasks   ;;
+        3) edit_task    ;;
+        4) delete_task  ;;
+        5) mark_done    ;;
+        6) search_tasks ;;
+        7) show_stats   ;;
+        0) printf "${GREEN}Exiting... Goodbye.${RESET}\n"; exit 0 ;;
+        *) printf "${RED}Invalid option.${RESET}\n" ;;
     esac
 
     printf "\nPress Enter to continue..."

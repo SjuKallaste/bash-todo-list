@@ -1,6 +1,7 @@
 CSV_FILE="tasks.csv"
 CSV_HEADER="ID,Title,Status,Date,Notes"
 STATUS_PENDING="Pending"
+STATUS_DONE="Done"
 
 init_storage() {
     if [[ ! -f "$CSV_FILE" ]]; then
@@ -19,6 +20,10 @@ next_id() {
         fi
     done
     printf "%d" $(( max_id + 1 ))
+}
+
+id_exists() {
+    grep -q "^${1}," "$CSV_FILE" 2>/dev/null
 }
 
 add_task() {
@@ -75,17 +80,89 @@ view_tasks() {
     done
 }
 
+delete_task() {
+    view_tasks
+
+    printf "Task ID to delete: "
+    read -r target_id
+
+    if [[ ! "$target_id" =~ ^[0-9]+$ ]]; then
+        printf "Error: ID must be a number.\n"
+        return 1
+    fi
+
+    if ! id_exists "$target_id"; then
+        printf "Error: no task with ID %s.\n" "$target_id"
+        return 1
+    fi
+
+    printf "Delete task #%s? [y/N]: " "$target_id"
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        printf "Cancelled.\n"
+        return
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    grep -v "^${target_id}," "$CSV_FILE" > "$tmp"
+    mv "$tmp" "$CSV_FILE"
+
+    printf "Task #%s deleted.\n" "$target_id"
+}
+
+mark_done() {
+    view_tasks
+
+    printf "Task ID to mark as done: "
+    read -r target_id
+
+    if [[ ! "$target_id" =~ ^[0-9]+$ ]]; then
+        printf "Error: ID must be a number.\n"
+        return 1
+    fi
+
+    if ! id_exists "$target_id"; then
+        printf "Error: no task with ID %s.\n" "$target_id"
+        return 1
+    fi
+
+    local current_status
+    current_status=$(grep "^${target_id}," "$CSV_FILE" | cut -d',' -f3)
+    if [[ "$current_status" == "$STATUS_DONE" ]]; then
+        printf "Task #%s is already done.\n" "$target_id"
+        return
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    while IFS= read -r row; do
+        if [[ "$row" == ${target_id},* ]]; then
+            printf "%s\n" "$row" | sed "s/,${STATUS_PENDING},/,${STATUS_DONE},/"
+        else
+            printf "%s\n" "$row"
+        fi
+    done < "$CSV_FILE" > "$tmp"
+    mv "$tmp" "$CSV_FILE"
+
+    printf "Task #%s marked as done.\n" "$target_id"
+}
+
     while true; do
         printf "\n"
         printf "1) Add Task\n"
         printf "2) View Tasks\n"
+        printf "3) Delete Task\n"
+        printf "4) Mark as Done\n"
         printf "0) Quit\n"
         printf "Choice: "
         read -r choice
 
         case "$choice" in
-            1) add_task   ;;
-            2) view_tasks ;;
+            1) add_task    ;;
+            2) view_tasks  ;;
+            3) delete_task ;;
+            4) mark_done   ;;
             0) printf "Goodbye.\n"; exit 0 ;;
             *) printf "Invalid option.\n" ;;
         esac

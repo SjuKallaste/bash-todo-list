@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 CSV_FILE="tasks.csv"
 CSV_HEADER="ID,Title,Status,Date,Notes"
 STATUS_PENDING="Pending"
@@ -280,7 +278,6 @@ show_stats() {
     fi
 }
 
-main_menu() {
     while true; do
         clear
 
@@ -319,7 +316,6 @@ main_menu() {
         printf "\nPress Enter to continue..."
         read -r _
     done
-}
 
 init_storage
 main_menu
